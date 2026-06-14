@@ -7,6 +7,9 @@ import org.apache.poi.ss.usermodel.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class LlegadaExcelService {
@@ -15,158 +18,101 @@ public class LlegadaExcelService {
 
     public void importar(MultipartFile file) {
 
-        try {
-
-            Workbook workbook =
-                    WorkbookFactory.create(
-                            file.getInputStream()
-                    );
-            for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
-
-                System.out.println(
-                        workbook.getSheetAt(i).getSheetName()
-                );
-            }
+        try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
 
             Sheet sheet = workbook.getSheet("EST_TOTAL_(2)");
-            for (int i = 0; i < 5; i++) {
 
-                Row row = sheet.getRow(i);
-
-                if(row == null){
-                    System.out.println("FILA " + i + " ES NULL");
-                    continue;
-                }
-
-                System.out.println("\n===== FILA " + i + " =====");
-
-                for(int j = 0; j < row.getLastCellNum(); j++){
-
-                    System.out.print(
-                            "[" +
-                                    new DataFormatter()
-                                            .formatCellValue(row.getCell(j))
-                                    + "]"
-                    );
-                }
-
-                System.out.println();
-
+            if (sheet == null) {
+                throw new RuntimeException("No existe la hoja EST_TOTAL_(2)");
             }
+
             llegadaRepository.deleteAll();
 
             Row filaFechas = sheet.getRow(0);
 
-            for(int fila = 1;
-                fila <= sheet.getLastRowNum();
-                fila++) {
+            List<Llegada> lote = new ArrayList<>();
+
+            for (int fila = 1; fila <= sheet.getLastRowNum(); fila++) {
 
                 Row row = sheet.getRow(fila);
 
-                if(row == null)
+                if (row == null)
                     continue;
 
-                String tipo =
-                        obtenerTexto(
-                                row.getCell(0)
-                        );
+                String tipo = obtenerTexto(row.getCell(0));
+                String codigo = obtenerTexto(row.getCell(1));
 
-                String codigo =
-                        obtenerTexto(
-                                row.getCell(1)
-                        );
-
-                if(codigo.isBlank())
+                if (codigo.isBlank())
                     continue;
 
-                for(int col = 2;
-                    col < row.getLastCellNum();
-                    col++) {
+                for (int col = 2; col < row.getLastCellNum(); col++) {
 
-                    String fecha =
-                            obtenerTexto(
-                                    filaFechas.getCell(col)
-                            );
+                    String fecha = obtenerTexto(filaFechas.getCell(col));
 
-                    if(fecha.isBlank())
+                    if (fecha.isBlank())
                         continue;
 
-                    double stock =
-                            obtenerNumero(
-                                    row.getCell(col)
-                            );
+                    double stock = obtenerNumero(row.getCell(col));
 
-                    if(stock > 0){
+                    if (stock > 0) {
 
-                        Llegada llegada =
-                                new Llegada();
+                        Llegada llegada = new Llegada();
 
                         llegada.setTipo(tipo);
                         llegada.setCodigo(codigo);
                         llegada.setFecha(fecha);
                         llegada.setStock(stock);
 
-                        System.out.println(
-                                "CODIGO = " + codigo +
-                                        " | FECHA = " + fecha +
-                                        " | STOCK = " + stock
-                        );
+                        lote.add(llegada);
 
-                        llegadaRepository.save(
-                                llegada
-                        );
+                        if (lote.size() == 500) {
+                            llegadaRepository.saveAll(lote);
+                            lote.clear();
+                        }
                     }
                 }
             }
 
-            workbook.close();
+            if (!lote.isEmpty()) {
+                llegadaRepository.saveAll(lote);
+            }
 
-            System.out.println(
-                    "Llegadas importadas correctamente"
-            );
+            System.out.println("Llegadas importadas correctamente.");
 
         } catch (Exception e) {
-
-            e.printStackTrace();
+            throw new RuntimeException("Error al importar el archivo Excel", e);
         }
     }
-    private String obtenerTexto(Cell cell){
 
-        if(cell == null)
+    private String obtenerTexto(Cell cell) {
+
+        if (cell == null)
             return "";
 
-        DataFormatter formatter =
-                new DataFormatter();
+        DataFormatter formatter = new DataFormatter();
 
-        return formatter
-                .formatCellValue(cell)
-                .trim();
+        return formatter.formatCellValue(cell).trim();
     }
 
-    private double obtenerNumero(Cell cell){
+    private double obtenerNumero(Cell cell) {
 
-        try{
+        try {
 
-            if(cell == null)
+            if (cell == null)
                 return 0;
 
-            if(cell.getCellType()
-                    == CellType.NUMERIC){
-
+            if (cell.getCellType() == CellType.NUMERIC) {
                 return cell.getNumericCellValue();
             }
 
-            String valor =
-                    obtenerTexto(cell)
-                            .replace(",", "");
+            String valor = obtenerTexto(cell).replace(",", "");
 
-            if(valor.isBlank())
+            if (valor.isBlank())
                 return 0;
 
             return Double.parseDouble(valor);
 
-        }catch(Exception e){
-
+        } catch (Exception e) {
             return 0;
         }
     }
