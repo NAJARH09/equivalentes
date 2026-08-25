@@ -22,5 +22,6 @@ public class Producto {
     private String tipo;
     private Integer stock;
     private String llegada;
+    private String marca;
 
 }
