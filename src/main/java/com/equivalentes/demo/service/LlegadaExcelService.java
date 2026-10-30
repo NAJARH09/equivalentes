@@ -150,6 +150,7 @@ public class LlegadaExcelService {
         return formatter.formatCellValue(cell).trim();
     }
 
+
     private String obtenerFecha(
             Cell cell, DataFormatter formatter) {
 
@@ -157,19 +158,29 @@ public class LlegadaExcelService {
             return "";
         }
 
+        // Caso 1: Excel reconoce la celda como fecha.
         if (cell.getCellType() == CellType.NUMERIC
                 && DateUtil.isCellDateFormatted(cell)) {
 
-            SimpleDateFormat formato =
-                    new SimpleDateFormat("dd/MM/yyyy");
-
-            return formato.format(cell.getDateCellValue());
+            return new SimpleDateFormat("dd/MM/yyyy")
+                    .format(cell.getDateCellValue());
         }
 
-        // Si Excel almacena la fecha como texto,
-        // devolver el texto tal como aparece.
+        // Caso 2: Excel guarda la fecha como número serial.
+        if (cell.getCellType() == CellType.NUMERIC) {
+
+            double valor = cell.getNumericCellValue();
+
+            if (valor >= 20000 && valor <= 80000) {
+                return new SimpleDateFormat("dd/MM/yyyy")
+                        .format(DateUtil.getJavaDate(valor));
+            }
+        }
+
+        // Caso 3: la fecha está guardada como texto.
         return obtenerTexto(cell, formatter);
     }
+
 
     private double obtenerNumero(
             Cell cell, DataFormatter formatter) {
