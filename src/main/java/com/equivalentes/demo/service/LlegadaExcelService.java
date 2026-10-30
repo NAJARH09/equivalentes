@@ -1,10 +1,14 @@
+
 package com.equivalentes.demo.service;
 
 import com.equivalentes.demo.model.Llegada;
 import com.equivalentes.demo.repository.LlegadaRepository;
+
 import lombok.RequiredArgsConstructor;
+
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.text.SimpleDateFormat;
@@ -17,34 +21,39 @@ public class LlegadaExcelService {
 
     private final LlegadaRepository llegadaRepository;
 
+    @Transactional
     public void importar(MultipartFile file) {
 
-        try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
+        // 1. Validar que se haya seleccionado un archivo.
+        if (file == null || file.isEmpty()) {
+            throw new RuntimeException(
+                    "Debes seleccionar un archivo Excel."
+            );
+        }
 
+        try (Workbook workbook =
+                     WorkbookFactory.create(file.getInputStream())) {
+
+            // 2. Obtener la hoja exacta.
             Sheet sheet = workbook.getSheet("EST_TOTAL_(2)");
 
             if (sheet == null) {
                 throw new RuntimeException(
-                        "No existe la hoja EST_TOTAL_(2). Hojas disponibles: "
+                        "No existe la hoja EST_TOTAL_(2). "
+                                + "Hojas disponibles: "
                                 + obtenerHojas(workbook)
                 );
             }
 
-            // Borramos las llegadas anteriores
-            llegadaRepository.deleteAll();
+            DataFormatter formatter = new DataFormatter();
 
-            List<Llegada> lote = new ArrayList<>();
+            // 3. Preparar los registros antes de borrar los anteriores.
+            List<Llegada> llegadas = new ArrayList<>();
 
-            /*
-             * Estructura real del Excel:
-             *
-             * B = CODIGO       -> índice 1
-             * C = DESC         -> índice 2
-             * D = FECHA_LLEGADA -> índice 3
-             * E = CANTIDAD     -> índice 4
-             */
-
-            for (int fila = 1; fila <= sheet.getLastRowNum(); fila++) {
+            // La fila 0 contiene los encabezados.
+            for (int fila = 1;
+                 fila <= sheet.getLastRowNum();
+                 fila++) {
 
                 Row row = sheet.getRow(fila);
 
@@ -52,159 +61,151 @@ public class LlegadaExcelService {
                     continue;
                 }
 
-                // B = CODIGO
-                String codigo = obtenerTexto(row.getCell(1));
+                // Columna A: TIPO.
+                String tipo = obtenerTexto(
+                        row.getCell(0), formatter
+                );
 
-                if (codigo.isBlank()) {
-                    continue;
-                }
+                // Columna B: CODIGO.
+                String codigo = obtenerTexto(
+                        row.getCell(1), formatter
+                );
 
-                // D = FECHA_LLEGADA
-                String fecha = obtenerFecha(row.getCell(3));
+                // Columna D: FECHA.
+                String fecha = obtenerFecha(
+                        row.getCell(3), formatter
+                );
 
-                if (fecha.isBlank()) {
-                    continue;
-                }
+                // Columna E: CANTIDAD.
+                double cantidad = obtenerNumero(
+                        row.getCell(4), formatter
+                );
 
-                // E = CANTIDAD
-                double cantidad = obtenerNumero(row.getCell(4));
-
-                // Si la cantidad es 0, no guardamos
-                if (cantidad <= 0) {
+                // Ignorar filas sin los datos necesarios.
+                if (codigo.isBlank()
+                        || fecha.isBlank()
+                        || cantidad <= 0) {
                     continue;
                 }
 
                 Llegada llegada = new Llegada();
 
+                llegada.setTipo(tipo);
                 llegada.setCodigo(codigo);
                 llegada.setFecha(fecha);
                 llegada.setStock(cantidad);
 
-                /*
-                 * Si tu modelo Llegada todavía tiene "tipo",
-                 * puedes dejarlo vacío porque este Excel ya no tiene
-                 * una columna TIPO.
-                 */
-                llegada.setTipo("");
-
-                lote.add(llegada);
-
-                // Guardamos cada 500 registros
-                if (lote.size() == 500) {
-
-                    llegadaRepository.saveAll(lote);
-
-                    lote.clear();
-                }
+                llegadas.add(llegada);
             }
 
-            // Guardar los registros restantes
-            if (!lote.isEmpty()) {
+            // 4. No borrar datos si no se encontraron registros válidos.
+            if (llegadas.isEmpty()) {
+                throw new RuntimeException(
+                        "El Excel no contiene llegadas válidas. "
+                                + "No se reemplazaron los registros actuales."
+                );
+            }
+
+            // 5. Reemplazar los registros anteriores.
+            llegadaRepository.deleteAll();
+
+            // 6. Guardar los registros del nuevo Excel.
+            for (int inicio = 0;
+                 inicio < llegadas.size();
+                 inicio += 500) {
+
+                int fin = Math.min(
+                        inicio + 500,
+                        llegadas.size()
+                );
+
+                List<Llegada> lote =
+                        llegadas.subList(inicio, fin);
 
                 llegadaRepository.saveAll(lote);
             }
 
-            System.out.println("=================================");
-            System.out.println("LLEGADAS IMPORTADAS CORRECTAMENTE");
-            System.out.println("=================================");
+            System.out.println(
+                    "Llegadas importadas: " + llegadas.size()
+            );
 
         } catch (Exception e) {
 
-            e.printStackTrace();
-
+            // La excepción permite que @Transactional
+            // revierta el borrado y las inserciones si fallan.
             throw new RuntimeException(
-                    "Error al importar el archivo Excel: " + e.getMessage(),
+                    "Error al importar el Excel: " + e.getMessage(),
                     e
             );
         }
     }
 
-    /**
-     * Obtiene texto de una celda.
-     */
-    private String obtenerTexto(Cell cell) {
+    private String obtenerTexto(
+            Cell cell, DataFormatter formatter) {
 
         if (cell == null) {
             return "";
         }
-
-        DataFormatter formatter = new DataFormatter();
 
         return formatter.formatCellValue(cell).trim();
     }
 
-    /**
-     * Obtiene una fecha de Excel.
-     *
-     * Si la celda es una fecha real de Excel,
-     * la convierte a dd/MM/yyyy.
-     */
-    private String obtenerFecha(Cell cell) {
+    private String obtenerFecha(
+            Cell cell, DataFormatter formatter) {
 
         if (cell == null) {
             return "";
         }
 
-        try {
+        if (cell.getCellType() == CellType.NUMERIC
+                && DateUtil.isCellDateFormatted(cell)) {
 
-            if (cell.getCellType() == CellType.NUMERIC
-                    && DateUtil.isCellDateFormatted(cell)) {
+            SimpleDateFormat formato =
+                    new SimpleDateFormat("dd/MM/yyyy");
 
-                SimpleDateFormat formato =
-                        new SimpleDateFormat("dd/MM/yyyy");
-
-                return formato.format(cell.getDateCellValue());
-            }
-
-            return obtenerTexto(cell);
-
-        } catch (Exception e) {
-
-            return "";
+            return formato.format(cell.getDateCellValue());
         }
+
+        // Si Excel almacena la fecha como texto,
+        // devolver el texto tal como aparece.
+        return obtenerTexto(cell, formatter);
     }
 
-    /**
-     * Obtiene números de Excel.
-     */
-    private double obtenerNumero(Cell cell) {
+    private double obtenerNumero(
+            Cell cell, DataFormatter formatter) {
 
         if (cell == null) {
             return 0;
         }
 
         try {
-
             if (cell.getCellType() == CellType.NUMERIC) {
-
                 return cell.getNumericCellValue();
             }
 
-            String valor = obtenerTexto(cell);
+            String valor = obtenerTexto(cell, formatter);
 
             if (valor.isBlank()) {
                 return 0;
             }
 
-            // Por si Excel trae 1,920
+            // Ejemplo: "1,400" se convierte en 1400.
             valor = valor.replace(",", "");
 
             return Double.parseDouble(valor);
 
-        } catch (Exception e) {
-
+        } catch (NumberFormatException e) {
             return 0;
         }
     }
 
-    /**
-     * Muestra las hojas disponibles en caso de error.
-     */
     private String obtenerHojas(Workbook workbook) {
 
         StringBuilder hojas = new StringBuilder();
 
-        for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+        for (int i = 0;
+             i < workbook.getNumberOfSheets();
+             i++) {
 
             if (i > 0) {
                 hojas.append(", ");
